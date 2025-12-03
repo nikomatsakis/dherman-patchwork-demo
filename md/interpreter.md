@@ -69,6 +69,7 @@ sequenceDiagram
         deactivate I
         activate S1
         S1-->>I: Do uuid=0
+        deactivate S1
         activate I
 
         rect rgb(200, 240, 200)
@@ -81,6 +82,7 @@ sequenceDiagram
                 deactivate I
                 activate S2
                 S2-->>I: Do uuid=0
+                deactivate S2
                 activate I
 
                 rect rgb(240, 240, 200)
@@ -89,6 +91,7 @@ sequenceDiagram
 
                 I->>S2: send result
                 deactivate I
+                activate S2
                 S2-->>I: Complete
                 deactivate S2
                 activate I
@@ -97,6 +100,7 @@ sequenceDiagram
 
         I->>S1: send result
         deactivate I
+        activate S1
         S1-->>I: Complete
         deactivate S1
         activate I
