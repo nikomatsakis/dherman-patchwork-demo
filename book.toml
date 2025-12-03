@@ -1,0 +1,15 @@
+[book]
+authors = ["Niko Matsakis"]
+language = "en"
+src = "md"
+title = "Threadbare"
+
+[preprocessor]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output]
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
