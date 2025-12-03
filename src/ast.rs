@@ -11,7 +11,7 @@ pub enum Ast {
         think: Think,
     },
 
-    Do {
+    Block {
         children: Vec<Ast>,
     },
 }

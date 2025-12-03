@@ -53,11 +53,11 @@ impl Agent {
         // Therefore, we have this horrific hack: we funnel ALL messages to a common
         // place, where they get redirected out based on the session.
         // Create a shared vector where we dump updates
-        let (main_loop_tx, main_loop_rx) = unbounded_channel();
+        let (redirect_tx, redirect_rx) = unbounded_channel();
 
         // Create a MCP server that we will offer
         let mcp_registry =
-            McpServiceRegistry::new().with_mcp_server("patchwork", McpServerActor::new(main_loop_tx.clone()).server())?;
+            McpServiceRegistry::new().with_mcp_server("patchwork", McpServerActor::new(redirect_tx.clone()).server())?;
 
         JrHandlerChain::new()
             // Handle MCP registry events
@@ -66,7 +66,7 @@ impl Agent {
             // we send them to `session_update_tx` so we can pick them off elsewhere.
             // There should be a more convenient way to deal with this.
             .on_receive_notification({
-                let main_loop_tx = main_loop_tx.clone();
+                let main_loop_tx = redirect_tx.clone();
                 async move |notification: SessionNotification, _cx| {
                     main_loop_tx
                         .send(RedirectMessage::IncomingMessage(
@@ -89,7 +89,7 @@ impl Agent {
             // Get a client handle
             .with_client(async move |cx| {
                 // Task 1: receive messages for the "main"
-                cx.spawn(Self::redirect_actor(cx.clone(), main_loop_rx))?;
+                cx.spawn(Self::redirect_actor(cx.clone(), redirect_rx))?;
 
                 // Task 2: receive new "think" requests from the interpreter
                 // Receive a request from the interpreter
@@ -100,7 +100,8 @@ impl Agent {
                                 cx.clone(),
                                 prompt,
                                 tx,
-                                main_loop_tx.clone(),
+                                redirect_tx.clone(),
+                                mcp_registry.clone(),
                             ))?;
                         }
                     }
@@ -111,8 +112,8 @@ impl Agent {
             .await
     }
 
-    /// The redirect actor keeps a stack of active "think" requests.
-    /// And sends
+    /// The redirect actor keeps a stack of active "thinkers" and
+    /// "redirects" incoming messages to the top of the stack.
     async fn redirect_actor(
         _cx: JrConnectionCx,
         mut main_loop_rx: tokio::sync::mpsc::UnboundedReceiver<RedirectMessage>,
@@ -147,18 +148,23 @@ impl Agent {
         prompt: String,
         tx: std::sync::mpsc::Sender<ThinkResponse>,
         main_loop_tx: tokio::sync::mpsc::UnboundedSender<RedirectMessage>,
+        mcp_registry: McpServiceRegistry,
     ) -> Result<(), sacp::Error> {
+        // Create the session request, including our MCP server
+        let mut new_session = NewSessionRequest {
+                cwd: std::env::current_dir().expect("can get current directory"),
+                mcp_servers: vec![], // FIXME: add mcp server here
+                meta: None,
+            };
+        mcp_registry.add_registered_mcp_servers_to(&mut new_session);
+
         // Start the session
         let NewSessionResponse {
             session_id,
             modes: _,
             meta: _,
         } = cx
-            .send_request(NewSessionRequest {
-                cwd: std::env::current_dir().expect("can get current directory"),
-                mcp_servers: vec![],
-                meta: None,
-            })
+            .send_request(new_session)
             .block_task()
             .await?;
 
@@ -167,6 +173,11 @@ impl Agent {
         main_loop_tx
             .send(RedirectMessage::PushThinker(think_tx))
             .expect("main loop to be alive");
+
+        //            
+        //            main_loop   think_tx/think_rx
+        //               |
+        //               |-------------->
 
         // Start the prompt. When we get the response, send that to the main loop too.
         cx.send_request(PromptRequest {
@@ -225,12 +236,14 @@ impl Agent {
             }
         }
 
-        tx.send(ThinkResponse::Complete { message: result })
-            .map_err(sacp::util::internal_error)?;
-
+        // Pop our thinker off the stack
         main_loop_tx
             .send(RedirectMessage::PopThinker)
             .expect("main loop to be alive");
+
+        // Send final result back to the interpreter, which will then resume execution
+        tx.send(ThinkResponse::Complete { message: result })
+            .map_err(sacp::util::internal_error)?;
 
         Ok(())
     }

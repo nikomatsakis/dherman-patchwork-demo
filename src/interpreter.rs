@@ -35,7 +35,7 @@ impl Interpreter {
                 output.push_str(message);
                 output.push_str("\n");
             }
-            Ast::Do { children } => {
+            Ast::Block { children } => {
                 for child in children {
                     self.interpret(child)?;
                 }
@@ -48,6 +48,18 @@ impl Interpreter {
         }
         Ok(output)
     }
+
+    // StackFrame0   Thinker0
+    //     |            |
+    //     |----------->|    (think)
+    //     :            |
+    //                  \--(mcp:do)--> |
+    //     : |<------------------------| // ThinkResponse::Do
+    //     : | (recursive call to `interpret`)
+    //     : |------------------------>| // `do_tx.send()`
+    //     :            |<------------ |
+    //     :            |
+    //     |<-----------|   (LLM completes)
 
     fn think(&mut self, think: &Think) -> Result<String, sacp::Error> {
         let (tx, rx) = std::sync::mpsc::channel();
